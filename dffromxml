@@ -1,0 +1,88 @@
+#! /bin/bash
+
+###############################################################################
+#
+# The purpose of this script is to extract the dielectric function from file
+# "vasprun.xml" (or any file given as argument possessing a vasprun.xml format).
+# Currently, it can handle DFT (LDA/[meta-]GGA/hybrids), GW, and BSE outputs.
+#
+# The dielectric function is written to file REEPS (containing the real part)
+# and IMEPS (containing the imaginary part) in an x-y-format suitable for direct
+# use with "xmgrace" (mind: you have six tensor components on file, i.e., if
+# you want to see all don't forget to specify the "-nxy" option for "xmgrace").
+# In the GW case several approximations are available. In this case two versions
+# (RE/IM)EPS.ip (for the simple independent-particle dielectric function) and
+# (RE/IM)EPS.lfh (for the RPA dielectric function including local-field effects
+# on Hartee level) are created.
+#
+###############################################################################
+
+filename="$1"
+gw='false'
+if [ ''$filename = '' ]
+then
+filename='vasprun.xml'
+fi
+
+echo 'Reading data from' $filename
+filesize=`cat $filename | wc -l`
+
+# this is the tag still used for BSE output but also vasp.5.x DFT output
+result=`grep -n '<dielectricfunction>' $filename | tr ':' ' ' | sed -e '1,1s/<dielectricfunction>//'`
+
+# for vasp.6.x this tag is used in the DFT case (including hybrids)
+if [ ''$result = '' ]
+then
+result=`grep -n '<dielectricfunction comment="density-density">' $filename | tr ':' ' ' | sed -e '1,1s/<dielectricfunction comment="density-density">//'`
+fi
+
+# and these tags are used in GW outputs; we extract first the (macroscopic)
+# dielectric function including local-field effects (on Hartree level) and
+# always extract the result of the last iteration if NELM was >1 in the GW run
+if [ ''$result = '' ]
+then
+gw='true'
+result=`grep -n '<dielectricfunction comment="INVERSE MACROSCOPIC DIELECTRIC TENSOR (including local field effects in RPA (Hartree))">' $filename | tr ':' ' ' | sed -e '1,$s/<dielectricfunction comment="INVERSE MACROSCOPIC DIELECTRIC TENSOR (including local field effects in RPA (Hartree))">//' | tail -1`
+fi
+
+# if we still found nothing then there is no dielectric function on file ...
+if [ ''$result = '' ]
+then
+echo 'Sorry, cannot find any dielectric function ...'
+exit 1
+fi
+
+# now the extraction process itself: first calculate the initial and final
+# position(s) or the data for imaginary and real parts (needs to search the
+# first occurrence of the "</imag>" tag to know the number of data points);
+# then it's just a simple combination of "tail" and "head" along with two simple
+# "sed" commands removing the XML separators "<r>" and "</r>" around the numbers
+# to get the desired data ...
+istart=`echo $result + 12 | bc -l`
+irest=`echo $filesize - $istart + 1 | bc -l`
+result=`tail -$irest $filename | grep -n '<\/imag>' | head -1 | tr ':' ' ' | sed -e '1,1s/<\/imag>//'`
+size=`echo $result - 3 | bc -l`
+rstart=`echo $istart + $size + 14 | bc -l`
+rrest=`echo $filesize - $rstart + 1 | bc -l`
+tail -$irest $filename | head -$size | sed -e '1,$s/     <r>  //' | sed -e '1,$s/ <\/r>//' > IMEPS
+tail -$rrest $filename | head -$size | sed -e '1,$s/     <r>  //' | sed -e '1,$s/ <\/r>//' > REEPS
+
+# in any non-GW case this would be the end; for GW we extract as a second set
+# the simple (microscopic) dielectric function (without local-field effects);
+# the code for extraction of data is exactly the same as above ...
+if [ "$gw" = "true" ]
+then
+# rename the output files for the first set (l ocal  f ield   h artree) ...
+mv IMEPS IMEPS.lfh
+mv REEPS REEPS.lfh
+# ... and then search the second set
+result=`grep -n '<dielectricfunction comment="HEAD OF MICROSCOPIC DIELECTRIC TENSOR (INDEPENDENT PARTICLE)">' $filename | tr ':' ' ' | sed -e '1,$s/<dielectricfunction comment="HEAD OF MICROSCOPIC DIELECTRIC TENSOR (INDEPENDENT PARTICLE)">//' | tail -1`
+istart=`echo $result + 12 | bc -l`
+irest=`echo $filesize - $istart + 1 | bc -l`
+result=`tail -$irest $filename | grep -n '<\/imag>' | head -1 | tr ':' ' ' | sed -e '1,1s/<\/imag>//'`
+size=`echo $result - 3 | bc -l`
+rstart=`echo $istart + $size + 14 | bc -l`
+rrest=`echo $filesize - $rstart + 1 | bc -l`
+tail -$irest $filename | head -$size | sed -e '1,$s/     <r>  //' | sed -e '1,$s/ <\/r>//' > IMEPS.ip
+tail -$rrest $filename | head -$size | sed -e '1,$s/     <r>  //' | sed -e '1,$s/ <\/r>//' > REEPS.ip
+fi
