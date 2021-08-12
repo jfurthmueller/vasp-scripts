@@ -1,0 +1,35 @@
+#! /bin/sh
+
+name="$1"
+if [ ""$name = "" ]
+then name='DOSPLOT'
+fi
+echo 'input from' $name
+outname=$name'-swap'
+
+if [ -e $outname ]
+then
+rm $outname
+echo 'removing file' $outname
+fi
+echo 'output  to' $outname
+
+length=`cat $name | wc -l`
+echo $length
+
+i=0
+while [ $i -lt $length ]
+do
+i=`expr $i + 1`
+line=`head -$i $name | tail -1`
+
+e=0. ; d=0. ; n=0.
+for tmp in $line
+do
+e=$d ; d=$n ; n=$tmp
+done
+outline="$d $e"
+
+echo $outline >> $outname
+
+done

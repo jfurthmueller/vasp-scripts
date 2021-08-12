@@ -1,0 +1,49 @@
+#! /bin/sh
+
+name="$1"
+if [ ""$name = "" ]
+then name='LDOS'
+fi
+echo 'input from' $name
+outname=$name'-swap'
+
+if [ -e $outname'-s' ]
+then
+rm $outname'-s'
+echo 'removing file' $outname'-s'
+fi
+if [ -e $outname'-p' ]
+then
+rm $outname'-p'
+echo 'removing file' $outname'-p'
+fi
+if [ -e $outname'-d' ]
+then
+rm $outname'-d'
+echo 'removing file' $outname'-d'
+fi
+echo 'output  to' $outname'-[s,p,d]'
+
+length=`cat $name | wc -l`
+echo $length
+
+i=0
+while [ $i -lt $length ]
+do
+i=`expr $i + 1`
+line=`head -$i $name | tail -1`
+
+e=0. ; ds=0. ; dp=0. ; dd=0.
+for tmp in $line
+do
+e=$ds ; ds=$dp ; dp=$dd ; dd=$tmp
+done
+outlines="$ds $e"
+outlinep="$dp $e"
+outlined="$dd $e"
+
+echo $outlines >> $outname'-s'
+echo $outlinep >> $outname'-p'
+echo $outlined >> $outname'-d'
+
+done

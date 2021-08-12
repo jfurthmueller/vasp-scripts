@@ -1,0 +1,64 @@
+#! /bin/bash
+
+################################################################################
+#                                                                              #
+#  The intention of this script is to extract a (numbered) list of k-points    #
+#  from an EIGENVAL file (as if the VASP calculation had been running with     #
+#  these k-points only), allowing even an re-ordering. The main purpose is to  #
+#  misuse (sufficiently fine) regular meshes for band structure calculations   #
+#  by extracting the data for all k-points on certain symmetry lines. The      #
+#  'matching' of the band structure k-points and the regular mesh points (by   #
+#  number of the k-point in the regular mesh as numbered on IBZKPT) has to be  #
+#  done first and then the list of k-point numbers has to be given ... .       #
+#  The main application of this script should be HSE or GW calculations.       #
+#                                                                              #
+################################################################################
+
+# provide the list on the command line (restriction: does not allow an
+# arbitrary number of characters, usually a maximum of 255 but anyway this
+# is sufficient for example for 60 three-digit numbers plus spaces or 80
+# two-digit numbers plus spaces or a mixture of both in between ...).
+klist="$*"
+
+# output goes to EIGENVAL.band; ensure that EIGENVAL.band does not exist yet!
+if [ -e EIGENVAL.band ]
+then
+echo 'ERROR: File EIGENVAL.band already exists. Rename or remove it and rerun!'
+exit -1
+fi
+
+# Now we can start: First construct the header of EIGENVAL.band from EIGENVAL;
+# thereby this script has the flexibility to allow some changes below in order
+# to adopt potential future changes of the structure of EIGENVAL files ...
+fixedheaderlines=5
+changeline=6
+blanklines=1
+linesix=`head -6 EIGENVAL | tail -1`
+# extract the (original) number of electrons, k-points, and bands
+nelect=0 ; nkpoints=0 ; nbands=0
+for tmp in $linesix
+do
+nelect=$nkpoints ; nkpoints=$nbands ; nbands=$tmp
+done
+# determine the number of bands on the list (and perform a simple minimum check)
+outkpoints=0
+for tmp in $klist
+do
+outkpoints=`echo $outkpoints + 1 | bc -l`
+if [ $tmp -gt $nkpoints ]
+then
+echo 'ERROR: Only '$nkpoints' k-points on EIGENVAL but you request k-point '$tmp'.'
+exit -2
+fi
+done
+# now construct the header of EIGENVAL.band (replace the number of k-points)
+head -$fixedheaderlines EIGENVAL > EIGENVAL.band
+echo $nelect $outkpoints $nbands | awk '{ printf "%5d%5d%5d\n",$1,$2,$3 }' >> EIGENVAL.band
+# and extract all the k-points on the list
+blocksize=`echo "$nbands + 1 + $blanklines" | bc -l`
+headersize=`echo "$fixedheaderlines + 1" | bc -l`
+for k in $klist
+do
+endofk=`echo "$blocksize * $k + $headersize" | bc -l`
+head -$endofk EIGENVAL | tail -$blocksize >> EIGENVAL.band
+done

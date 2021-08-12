@@ -1,0 +1,207 @@
+#! /bin/bash
+
+################################################################################
+#                                                                              #
+#  The intention of this script is to extract/construct total and projected    #
+#  DOS from a DOSCAR file created with full lm-projection (LORBIT=2 in INCAR). #
+#                                                                              #
+################################################################################
+
+# this here is a technical preface: later we use the (g)awk command and there
+# is always a problem with the decimal point which is sometimes a point but
+# also sometimes a comma - find out what is the decimal point ...
+out=`echo 0 | awk '{ printf "%12.4E\n",$1 }' | grep -v ','`
+awkcomma='false'
+if [ ''$out = '' ]
+then
+awkcomma='true'
+fi
+
+# at the end we also allow total and partial sums over ions; get the list of
+# partial sums (if desired - without giving any argument nothing is done ...)
+psums="$*"
+
+# mainly we need to know the number of ions/projection spheres (first number
+# of first line) and of energy points (third number of sixth line) first
+head=`head -1 DOSCAR`
+np=0 ; dum1=0 ; dum2=0 ; dum3=0
+for tmp in $head
+do
+np=$dum1 ; dum1=$dum2 ; dum2=$dum3 ; dum3=$tmp
+done
+
+# independent of the given list for partial sums over ions we always like to
+# have the total sum, so add "1-$np" to the list ...
+sumlist="1-$np $psums"
+
+head=`head -6 DOSCAR | tail -1`
+ne=0 ; dum1=0 ; dum2=0 ; dum3=0 ; dum4=0
+for tmp in $head
+do
+dum1=$dum2 ; dum2=$ne ; ne=$dum3 ; dum3=$dum4 ; dum4=$tmp
+done
+echo $np $ne
+
+# now total DOS/NDOS:
+last=`echo "$ne + 6" | bc -l`
+head -$last DOSCAR | tail -$ne > dos.dat
+
+# and now ion by ion the detailed lm-projected DOS (easy part):
+i=0
+while [ $i -lt $np ]
+do
+i=`echo "$i + 1" | bc -l`
+last=`echo "$i * $ne + $ne + $i + 6" | bc -l`
+head -$last DOSCAR | tail -$ne > lmdos.$i.dat
+done
+
+# now the a bit less trivial part: construct the l-only-projected DOS per ion
+i=0
+while [ $i -lt $np ]
+do
+i=`echo "$i + 1" | bc -l`
+cat > ldos.$i.dat << EOL
+EOL
+cat > ados.$i.dat << EOA
+EOA
+j=0
+while [ $j -lt $ne ]
+do
+j=`echo "$j + 1" | bc -l`
+line=`head -$j lmdos.$i.dat | tail -1`
+e=0 ; s=0 ;  py=0 ;  pz=0 ;  px=0 ; dxy=0 ; dyz=0 ; dz2=0 ; dxz=0 ; dx2=0
+for tmp in $line
+do
+e=$s ; s=$py ;  py=$pz ;  pz=$px ;  px=$dxy ; dxy=$dyz ; dyz=$dz2 ; dz2=$dxz ; dxz=$dx2 ; dx2=$tmp
+done
+if [ $awkcomma = 'true' ]
+then
+p=`echo $py $pz $px | tr '.' ',' | awk '{ printf "%12.4E\n",$1+$2+$3 }' | tr ',' '.'`
+d=`echo $dxy $dyz $dz2 $dxz $dx2 | tr '.' ',' | awk '{ printf "%12.4E\n",$1+$2+$3+$4+$5 }' | tr ',' '.'`
+echo $e $s $p $d | tr '.' ',' | awk '{ printf "%8.3f%12.4E%12.4E%12.4E\n",$1,$2,$3,$4 }' | tr ',' '.' >> ldos.$i.dat
+tot=`echo $s $p $d | tr '.' ',' | awk '{ printf "%12.4E\n",$1+$2+$3 }' | tr ',' '.'`
+echo $e $tot | tr '.' ',' | awk '{ printf "%8.3f%12.4E\n",$1,$2 }' | tr ',' '.' >> ados.$i.dat
+else
+p=`echo $py $pz $px | awk '{ printf "%12.4E\n",$1+$2+$3 }'`
+d=`echo $dxy $dyz $dz2 $dxz $dx2 | awk '{ printf "%12.4E\n",$1+$2+$3+$4+$5 }'`
+echo $e $s $p $d | awk '{ printf "%8.3f%12.4E%12.4E%12.4E\n",$1,$2,$3,$4 }' >> ldos.$i.dat
+tot=`echo $s $p $d | awk '{ printf "%12.4E\n",$1+$2+$3 }'`
+echo $e $tot | awk '{ printf "%8.3f%12.4E\n",$1,$2 }' >> ados.$i.dat
+fi
+done
+done
+
+# and now finally the maximally harsh part: the non-site-projected (total)
+# lm- and l-projected DOS (and total DOS for comparison with data on dos.dat);
+# at this point we also allow partial sums (e.g. all atoms of one type) which
+# must be specified as an argument list to the script (see head of this script)
+# by a number of summation ranges, e.g. "1-4 5-10" (with no blanks around '-'!)
+# or alternatively comma-separated list, e.g. "1,2 5,6,8" (again with no blanks
+# around ','!) or a mixture of both, e.g. "1-4 5,6,8" - have fun with it ...
+for list in $sumlist
+do
+# first of all we have to expand the current list/range to a list of blank-
+# separated (ion) numbers to have a unique list format that can be handled
+# later; first step is to find the list format (comma or dash?)
+commalist='false' ; dashlist='false'
+out=`echo $list | grep -v ','`
+if [ ''$out = '' ]
+then
+commalist='true'
+fi
+out=`echo $list | grep -v '-'`
+if [ ''$out = '' ]
+then
+dashlist='true'
+fi
+# that's a kind of minimum error check ...
+if [ $dashlist = $commalist ]
+then
+echo 'Wrong list format for partial sum over ions.' $list ; exit -1
+fi
+# comma-lists are trivial, just replace the comma by blanks
+if [ $commalist = 'true' ]
+then
+alist=`echo $list | tr ',' ' '`
+# for dash-lists we need to extract start and end point an need to create a loop
+else
+range=`echo $list | tr '-' ' '` ; start=0 ; final=0
+for tmp in $range
+do
+start=$final ; final=$tmp
+done
+# another minimum error check
+if [ $start -gt $final ]
+then
+echo 'Invalid range for partial sum over ions.' $list ; exit -2
+fi
+i=$start
+alist=''
+while [ $i -le $final ]
+do
+alist=`echo "$alist $i"`
+i=`echo "$i + 1" | bc -l`
+done
+fi
+echo "$list" '('$alist')'
+cat > lmdos.$list.dat << EOLMP
+EOLMP
+cat > ldos.$list.dat << EOLP
+EOLP
+cat > ados.$list.dat << EOAP
+EOAP
+# now the real loop(s) over energy points and atoms ...
+j=0
+while [ $j -lt $ne ]
+do
+j=`echo "$j + 1" | bc -l`
+st=0 ;  pyt=0 ;  pzt=0 ;  pxt=0 ; dxyt=0 ; dyzt=0 ; dz2t=0 ; dxzt=0 ; dx2t=0
+for i in $alist
+do
+line=`head -$j lmdos.$i.dat | tail -1`
+e=0 ; s=0 ;  py=0 ;  pz=0 ;  px=0 ; dxy=0 ; dyz=0 ; dz2=0 ; dxz=0 ; dx2=0
+for tmp in $line
+do
+e=$s ; s=$py ;  py=$pz ;  pz=$px ;  px=$dxy ; dxy=$dyz ; dyz=$dz2 ; dz2=$dxz ; dxz=$dx2 ; dx2=$tmp
+done
+if [ $awkcomma = 'true' ]
+then
+st=`echo $st $s | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+pyt=`echo $pyt $py | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+pzt=`echo $pzt $pz | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+pxt=`echo $pxt $px | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+dxyt=`echo $dxyt $dxy | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+dyzt=`echo $dyzt $dyz | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+dz2t=`echo $dz2t $dz2 | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+dxzt=`echo $dxzt $dxz | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+dx2t=`echo $dx2t $dx2 | tr '.' ',' | awk '{ printf "%24.16E\n",$1+$2 }' | tr ',' '.'`
+else
+st=`echo $st $s | awk '{ printf "%24.16E\n",$1+$2 }'`
+pyt=`echo $pyt $py | awk '{ printf "%24.16E\n",$1+$2 }'`
+pzt=`echo $pzt $pz | awk '{ printf "%24.16E\n",$1+$2 }'`
+pxt=`echo $pxt $px | awk '{ printf "%24.16E\n",$1+$2 }'`
+dxyt=`echo $dxyt $dxy | awk '{ printf "%24.16E\n",$1+$2 }'`
+dyzt=`echo $dyzt $dyz | awk '{ printf "%24.16E\n",$1+$2 }'`
+dz2t=`echo $dz2t $dz2 | awk '{ printf "%24.16E\n",$1+$2 }'`
+dxzt=`echo $dxzt $dxz | awk '{ printf "%24.16E\n",$1+$2 }'`
+dx2t=`echo $dx2t $dx2 | awk '{ printf "%24.16E\n",$1+$2 }'`
+fi
+done
+if [ $awkcomma = 'true' ]
+then
+echo $e $st $pyt $pzt $pxt $dxyt $dyzt $dz2t $dxzt $dx2t | tr '.' ',' | awk '{ printf "%8.3f%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E\n",$1,$2,$3,$4,$5,$6,$7,$8,$9,$10 }' | tr ',' '.' >> lmdos.$list.dat
+pt=`echo $pyt $pzt $pxt | tr '.' ',' | awk '{ printf "%12.4E\n",$1+$2+$3 }' | tr ',' '.'`
+dt=`echo $dxyt $dyzt $dz2t $dxzt $dx2t | tr '.' ',' | awk '{ printf "%12.4E\n",$1+$2+$3+$4+$5 }' | tr ',' '.'`
+echo $e $st $pt $dt | tr '.' ',' | awk '{ printf "%8.3f%12.4E%12.4E%12.4E\n",$1,$2,$3,$4 }' | tr ',' '.' >> ldos.$list.dat
+tot=`echo $st $pt $dt | tr '.' ',' | awk '{ printf "%12.4E\n",$1+$2+$3 }' | tr ',' '.'`
+echo $e $tot | tr '.' ',' | awk '{ printf "%8.3f%12.4E\n",$1,$2 }' | tr ',' '.' >> ados.$list.dat
+else
+echo $e $st $pyt $pzt $pxt $dxyt $dyzt $dz2t $dxzt $dx2t | awk '{ printf "%8.3f%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E%12.4E\n",$1,$2,$3,$4,$5,$6,$7,$8,$9,$10 }' >> lmdos.$list.dat
+pt=`echo $pyt $pzt $pxt | awk '{ printf "%12.4E\n",$1+$2+$3 }'`
+dt=`echo $dxyt $dyzt $dz2t $dxzt $dx2t | awk '{ printf "%12.4E\n",$1+$2+$3+$4+$5 }'`
+echo $e $st $pt $dt | awk '{ printf "%8.3f%12.4E%12.4E%12.4E\n",$1,$2,$3,$4 }' >> ldos.$list.dat
+tot=`echo $st $pt $dt | awk '{ printf "%12.4E\n",$1+$2+$3 }'`
+echo $e $tot | awk '{ printf "%8.3f%12.4E\n",$1,$2 }' >> ados.$list.dat
+fi
+done
+done
